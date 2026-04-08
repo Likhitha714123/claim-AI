@@ -7,7 +7,6 @@ import pytesseract
 import re
 import os
 import platform
-
 # -------- TESSERACT PATH -------- #
 if platform.system() == "Windows":
     tesseract_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
