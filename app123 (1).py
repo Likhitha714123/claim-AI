@@ -5,11 +5,14 @@ import pickle
 from PIL import Image
 import pytesseract
 import re
+import os
+import platform
 
 # -------- TESSERACT PATH -------- #
-pytesseract.pytesseract.tesseract_cmd = (
-    r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-)
+if platform.system() == "Windows":
+    tesseract_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    if os.path.exists(tesseract_path):
+        pytesseract.pytesseract.tesseract_cmd = tesseract_path
 
 # -------- PAGE CONFIG -------- #
 st.set_page_config(page_title="Claim AI", layout="wide")
@@ -72,11 +75,11 @@ def extract_details(text):
     if age_match:
         age = int(age_match.group(1))
 
-    for code in diagnosis_map.keys():
+    for code in diagnosis_map:
         if code in text:
             diagnosis = code
 
-    for code in procedure_map.keys():
+    for code in procedure_map:
         if code in text:
             procedure = code
 
@@ -112,10 +115,8 @@ elif page == "📊 Prediction":
 
     st.title("📊 Claim Prediction")
 
-    # -------- UPLOAD -------- #
-    st.subheader("📄 Upload Prescription")
     uploaded_file = st.file_uploader(
-        "Upload Image",
+        "📄 Upload Prescription",
         type=["png", "jpg", "jpeg"]
     )
 
@@ -128,14 +129,11 @@ elif page == "📊 Prediction":
 
         extracted_text = pytesseract.image_to_string(image)
 
-        st.subheader("📜 PATIENT DETAILS")
+        st.subheader("📜 Patient Details")
         st.text(extracted_text)
 
-        auto_age, auto_diag, auto_proc = extract_details(
-            extracted_text
-        )
+        auto_age, auto_diag, auto_proc = extract_details(extracted_text)
 
-    # -------- INPUT -------- #
     age = st.number_input(
         "Age (1–120)",
         min_value=1,
@@ -143,58 +141,38 @@ elif page == "📊 Prediction":
         value=auto_age if auto_age else 25
     )
 
-    network = st.selectbox(
-        "In Network?[Yes/No]",
-        ["Yes", "No"]
-    )
-
-    prior_auth = st.selectbox(
-        "Prior Authorization[Yes/NO]",
-        ["Yes", "No"]
-    )
-
-    billing = st.number_input(
-        "Billing Amount ₹",
-        min_value=0.0
-    )
-
-    delay = st.number_input(
-        "Submission Delay [Days]",
-        min_value=0
-    )
+    network = st.selectbox("In Network?", ["Yes", "No"])
+    prior_auth = st.selectbox("Prior Authorization", ["Yes", "No"])
+    billing = st.number_input("Billing Amount ₹", min_value=0.0)
+    delay = st.number_input("Submission Delay [Days]", min_value=0)
 
     plan = st.selectbox(
-        "Insurance Type [HMO,PPO,EPO,POS,HDHP]",
+        "Insurance Type",
         list(plan_map.keys())
     )
 
     st.info(f"ℹ️ {plan}: {plan_description[plan]}")
 
     procedure = st.selectbox(
-        "Procedure Code[29881,36415,71045,93000,99213,99214,99283,G0439]",
+        "Procedure Code",
         list(procedure_map.keys()),
         index=list(procedure_map.keys()).index(auto_proc)
         if auto_proc in procedure_map else 0
     )
 
     diagnosis = st.selectbox(
-        "Diagnosis Code[E11.9,F32.9,I10,J45.909,M54.5,N39.0,R05,Z00.00]",
+        "Diagnosis Code",
         list(diagnosis_map.keys()),
         index=list(diagnosis_map.keys()).index(auto_diag)
         if auto_diag in diagnosis_map else 0
     )
 
-    # -------- PREDICT -------- #
     if st.button("Predict"):
 
         network_val = 1 if network == "Yes" else 0
         prior_auth_val = 1 if prior_auth == "Yes" else 0
 
-        user_data = pd.DataFrame(
-            0,
-            index=[0],
-            columns=columns
-        )
+        user_data = pd.DataFrame(0, index=[0], columns=columns)
 
         user_data.loc[0, 'patient_age_years'] = age
         user_data.loc[0, 'is_in_network'] = network_val
@@ -202,42 +180,31 @@ elif page == "📊 Prediction":
         user_data.loc[0, 'billed_amount_usd'] = billing
         user_data.loc[0, 'days_between_service_and_submission'] = delay
 
-        # -------- ONE HOT -------- #
         plan_col = f"insurance_plan_type_{plan}"
         proc_col = f"procedure_code_cpt_{procedure}"
         diag_col = f"primary_diagnosis_code_icd10_{diagnosis}"
 
         if plan_col in user_data.columns:
             user_data.loc[0, plan_col] = 1
-
         if proc_col in user_data.columns:
             user_data.loc[0, proc_col] = 1
-
         if diag_col in user_data.columns:
             user_data.loc[0, diag_col] = 1
 
-        # -------- SCALING -------- #
         user_scaled = scaler.transform(user_data)
-
-        # -------- PREDICTION -------- #
         prob = model.predict_proba(user_scaled)[0][1] * 100
 
-        # -------- RULES -------- #
         reasons = []
 
         if network_val == 0:
             reasons.append("Out-of-network provider")
-
         if prior_auth_val == 0:
             reasons.append("Missing prior authorization")
-
         if billing > 100000:
             reasons.append("High billing amount")
-
         if delay > 30:
             reasons.append("Late claim submission")
 
-        # -------- DECISION -------- #
         if len(reasons) >= 3:
             status = "DENIED"
         elif len(reasons) == 2:
@@ -245,62 +212,21 @@ elif page == "📊 Prediction":
         else:
             status = "APPROVED"
 
-        # -------- OUTPUT -------- #
         st.subheader("📊 Result")
         st.write("Claim Status:", status)
         st.write("Denial Probability:", round(prob, 2), "%")
 
-        # -------- WHY THIS PREDICTION -------- #
         st.subheader("📌 Why this prediction?")
-
         if reasons:
-            st.write(
-                f"The claim has **{round(prob, 2)}% denial probability** because:"
-            )
-
             for reason in reasons:
                 st.write(f"🔹 {reason}")
-
         else:
-            approval_reasons = []
-
-            if network_val == 1:
-                approval_reasons.append(
-                    "Provider is in-network, reducing denial risk"
-                )
-
-            if prior_auth_val == 1:
-                approval_reasons.append(
-                    "Prior authorization is available"
-                )
-
-            if billing <= 100000:
-                approval_reasons.append(
-                    "Billing amount is within normal expected range"
-                )
-
-            if delay <= 30:
-                approval_reasons.append(
-                    "Claim submitted within allowed time window"
-                )
-
-            if age <= 75:
-                approval_reasons.append(
-                    "Patient profile falls under normal verification criteria"
-                )
-
-            st.write(
-                f"The claim has a **low denial probability of {round(prob, 2)}%** because:"
-            )
-
-            for reason in approval_reasons:
-                st.write(f"✅ {reason}")
+            st.write("✅ Low risk based on entered details")
 
         st.subheader("🩺 Medical Info")
         st.write(f"{procedure} → {procedure_map[procedure]}")
         st.write(f"{diagnosis} → {diagnosis_map[diagnosis]}")
 
-        # -------- SAVE HISTORY -------- #
         history_row = {
             "Age": age,
             "Plan": plan,
@@ -312,26 +238,15 @@ elif page == "📊 Prediction":
 
         st.session_state.prediction_history.append(history_row)
 
-    # -------- HISTORY REPORT -------- #
     st.markdown("---")
     st.subheader("📁 Prediction History Report")
 
     if st.session_state.prediction_history:
+        history_df = pd.DataFrame(st.session_state.prediction_history)
 
-        history_df = pd.DataFrame(
-            st.session_state.prediction_history
-        )
+        with st.expander("📊 View Previous Predictions", expanded=True):
+            st.dataframe(history_df, use_container_width=True)
 
-        with st.expander(
-            "📊 View Previous Predictions",
-            expanded=True
-        ):
-            st.dataframe(
-                history_df,
-                use_container_width=True
-            )
-
-        # -------- DOWNLOAD REPORT -------- #
         csv = history_df.to_csv(index=False).encode("utf-8")
 
         st.download_button(
@@ -341,7 +256,6 @@ elif page == "📊 Prediction":
             mime="text/csv"
         )
 
-        # -------- CLEAR HISTORY -------- #
         if st.button("🗑 Clear History"):
             st.session_state.prediction_history = []
             st.rerun()
