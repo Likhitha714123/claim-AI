@@ -1,0 +1,17 @@
+numpy
+pandas
+streamlit
+joblib
+scikit-learn
+streamlit
+pillow
+pytesseract
+scikit-learn
+=======
+streamlit
+pandas
+numpy
+pillow
+pytesseract
+scikit-learn
+xgboost
