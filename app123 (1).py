@@ -7,11 +7,27 @@ import pytesseract
 import re
 import os
 import platform
+import zipfile
+
+# -------- PATH SETUP -------- #
+BASE_DIR = os.path.dirname(__file__)
+
 # -------- TESSERACT PATH -------- #
 if platform.system() == "Windows":
     tesseract_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
     if os.path.exists(tesseract_path):
         pytesseract.pytesseract.tesseract_cmd = tesseract_path
+else:
+    pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
+
+# -------- UNZIP MODEL IF NEEDED -------- #
+zip_path = os.path.join(BASE_DIR, "model.zip")
+model_path = os.path.join(BASE_DIR, "model.pkl")
+
+if not os.path.exists(model_path):
+    if os.path.exists(zip_path):
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(BASE_DIR)
 
 # -------- PAGE CONFIG -------- #
 st.set_page_config(page_title="Claim AI", layout="wide")
@@ -20,10 +36,17 @@ st.set_page_config(page_title="Claim AI", layout="wide")
 if "prediction_history" not in st.session_state:
     st.session_state.prediction_history = []
 
+# -------- DEBUG (OPTIONAL) -------- #
+# st.write("Files:", os.listdir(BASE_DIR))
+
 # -------- LOAD FILES -------- #
-model = pickle.load(open("model.pkl", "rb"))
-scaler = pickle.load(open("scaler.pkl", "rb"))
-columns = pickle.load(open("columns.pkl", "rb"))
+try:
+    model = pickle.load(open(model_path, "rb"))
+    scaler = pickle.load(open(os.path.join(BASE_DIR, "scaler.pkl"), "rb"))
+    columns = pickle.load(open(os.path.join(BASE_DIR, "columns.pkl"), "rb"))
+except Exception as e:
+    st.error(f"Error loading model files: {e}")
+    st.stop()
 
 # -------- MAPS -------- #
 plan_map = {
@@ -84,18 +107,12 @@ def extract_details(text):
 
     return age, diagnosis, procedure
 
-
 # -------- SIDEBAR -------- #
-page = st.sidebar.radio(
-    "Navigate",
-    ["🏠 Project Info", "📊 Prediction"]
-)
+page = st.sidebar.radio("Navigate", ["🏠 Project Info", "📊 Prediction"])
 
 # -------- PAGE 1 -------- #
 if page == "🏠 Project Info":
-
     st.title("🏥 Healthcare Claim Prediction System")
-
     st.markdown("""
 ### 📌 Project Overview
 - Predicts claim **Approved / Risk / Denied**
@@ -114,10 +131,7 @@ elif page == "📊 Prediction":
 
     st.title("📊 Claim Prediction")
 
-    uploaded_file = st.file_uploader(
-        "📄 Upload Prescription",
-        type=["png", "jpg", "jpeg"]
-    )
+    uploaded_file = st.file_uploader("📄 Upload Prescription", type=["png", "jpg", "jpeg"])
 
     extracted_text = ""
     auto_age, auto_diag, auto_proc = None, None, None
@@ -133,37 +147,25 @@ elif page == "📊 Prediction":
 
         auto_age, auto_diag, auto_proc = extract_details(extracted_text)
 
-    age = st.number_input(
-        "Age (1–120)",
-        min_value=1,
-        max_value=120,
-        value=auto_age if auto_age else 25
-    )
-
+    age = st.number_input("Age (1–120)", 1, 120, auto_age if auto_age else 25)
     network = st.selectbox("In Network?", ["Yes", "No"])
     prior_auth = st.selectbox("Prior Authorization", ["Yes", "No"])
     billing = st.number_input("Billing Amount ₹", min_value=0.0)
     delay = st.number_input("Submission Delay [Days]", min_value=0)
 
-    plan = st.selectbox(
-        "Insurance Type",
-        list(plan_map.keys())
-    )
-
-    st.info(f"ℹ️ {plan}: {plan_description[plan]}")
+    plan = st.selectbox("Insurance Type", list(plan_map.keys()))
+    st.info(f"{plan}: {plan_description[plan]}")
 
     procedure = st.selectbox(
         "Procedure Code",
         list(procedure_map.keys()),
-        index=list(procedure_map.keys()).index(auto_proc)
-        if auto_proc in procedure_map else 0
+        index=list(procedure_map.keys()).index(auto_proc) if auto_proc in procedure_map else 0
     )
 
     diagnosis = st.selectbox(
         "Diagnosis Code",
         list(diagnosis_map.keys()),
-        index=list(diagnosis_map.keys()).index(auto_diag)
-        if auto_diag in diagnosis_map else 0
+        index=list(diagnosis_map.keys()).index(auto_diag) if auto_diag in diagnosis_map else 0
     )
 
     if st.button("Predict"):
@@ -194,7 +196,6 @@ elif page == "📊 Prediction":
         prob = model.predict_proba(user_scaled)[0][1] * 100
 
         reasons = []
-
         if network_val == 0:
             reasons.append("Out-of-network provider")
         if prior_auth_val == 0:
@@ -204,60 +205,45 @@ elif page == "📊 Prediction":
         if delay > 30:
             reasons.append("Late claim submission")
 
-        if len(reasons) >= 3:
-            status = "DENIED"
-        elif len(reasons) == 2:
-            status = "RISK"
-        else:
-            status = "APPROVED"
+        status = "DENIED" if len(reasons) >= 3 else "RISK" if len(reasons) == 2 else "APPROVED"
 
         st.subheader("📊 Result")
         st.write("Claim Status:", status)
         st.write("Denial Probability:", round(prob, 2), "%")
 
         st.subheader("📌 Why this prediction?")
-        if reasons:
-            for reason in reasons:
-                st.write(f"🔹 {reason}")
-        else:
-            st.write("✅ Low risk based on entered details")
+        for r in reasons:
+            st.write(f"🔹 {r}") if reasons else st.write("✅ Low risk")
 
         st.subheader("🩺 Medical Info")
         st.write(f"{procedure} → {procedure_map[procedure]}")
         st.write(f"{diagnosis} → {diagnosis_map[diagnosis]}")
 
-        history_row = {
+        st.session_state.prediction_history.append({
             "Age": age,
             "Plan": plan,
             "Procedure": procedure,
             "Diagnosis": diagnosis,
             "Probability %": round(prob, 2),
             "Status": status
-        }
-
-        st.session_state.prediction_history.append(history_row)
+        })
 
     st.markdown("---")
     st.subheader("📁 Prediction History Report")
 
     if st.session_state.prediction_history:
-        history_df = pd.DataFrame(st.session_state.prediction_history)
-
-        with st.expander("📊 View Previous Predictions", expanded=True):
-            st.dataframe(history_df, use_container_width=True)
-
-        csv = history_df.to_csv(index=False).encode("utf-8")
+        df = pd.DataFrame(st.session_state.prediction_history)
+        st.dataframe(df, use_container_width=True)
 
         st.download_button(
-            label="⬇ Download Prediction Report (CSV)",
-            data=csv,
-            file_name="claim_prediction_history_report.csv",
-            mime="text/csv"
+            "⬇ Download CSV",
+            df.to_csv(index=False).encode("utf-8"),
+            "claim_prediction_history.csv",
+            "text/csv"
         )
 
         if st.button("🗑 Clear History"):
             st.session_state.prediction_history = []
             st.rerun()
-
     else:
         st.info("No predictions made yet.")
