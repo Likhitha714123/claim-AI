@@ -7,7 +7,6 @@ streamlit
 pillow
 pytesseract
 scikit-learn
-=======
 streamlit
 pandas
 numpy
